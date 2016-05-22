@@ -1,0 +1,186 @@
+---
+title: "civitas_INDEX"
+author: "Antonio Ripoll"
+date: "Thursday, May 12, 2016"
+output: html_document
+---
+
+# Creacion de indices de situacion respectoa a equipamientos
+Directorios y lectura de ficheros .SHP
+```{r}
+library(maptools)
+library(rgdal)
+library(rgeos)
+
+# Lectura de parcelas
+#Tarragona
+#parcela<-readOGR("C:/DadesObertes/TARRAGONA/2016/43_900_UA_2016-01-24_SHF/PARCELA", "PARCELA")
+#parcela<-readOGR("G:/TORREDEMBARRA/43_155_UA_2015-09-25_SHF/PARCELA","PARCELA")
+#Torredembarra
+parcela<-readOGR("C:/DADES/DadesObertes/TORREDEMBARRA/2016/43_155_UA_2016-01-24_SHF/PARCELA","PARCELA")
+
+# Lextura de equipamientos
+#Tarragona
+#equipa<-readOGR("C:/DadesObertes/GENCAT","equipa1")
+#Torredembarra
+equipa<-readOGR("C:/DADES/POUMTORRE_2/DADES_PG/equipaments","equipa1")
+
+#str(equipa@data)
+#str(parcela@data)
+plot(equipa@data$muni)
+#slotNames(equipa)
+#slotNames(parcela)
+#equipa@coords
+equipa=subset(equipa,equipa@data$muni=="Torredembarra")
+```
+
+Plot de datos graficos
+
+```{r}
+esta=parcela@polygons[1] # Primer poligono del fichero
+#estabuf=gBuffer(SpatialPolygons(esta), byid=TRUE, width=0)
+#esta
+
+# # Coordenadas del poligono
+# una<-parcela@polygons[[1]]@Polygons
+# una[[1]]@coords
+
+#Crea Buffer
+dos<-gBuffer(SpatialPolygons(esta), width = 200)
+plot(dos)
+plot(SpatialPolygons(esta),add=TRUE)
+
+# Soluciona errores de interseccion. Trabajar con buffers de distancia=0
+poly1 <- gBuffer(SpatialPolygons(parcela@polygons), byid=TRUE, width=0)
+poly2 <- gBuffer(dos, byid=TRUE, width=0)
+punt1 <- gBuffer(SpatialPoints(equipa@coords), byid=TRUE, width=0)
+clip2 <- gIntersection(poly1, poly2, byid=TRUE)
+
+clip <- gIntersection(SpatialPolygons(parcela@polygons),dos, byid=TRUE)
+plot(clip,col=clip@plotOrder, add=TRUE)
+```
+
+Crea indices
+
+```{r}
+df=c()
+for(g in 1:length(SpatialPolygons(parcela@polygons))){
+        dista<-mean(gDistance(SpatialPolygons(parcela@polygons)[g],
+                              SpatialPoints(equipa@coords),byid=TRUE))
+        df=c(df,dista)
+}
+
+index=as.data.frame(df)
+parcela@data$indiceTorre<-df
+guarda<-SpatialPolygonsDataFrame(SpatialPolygons(parcela@polygons),parcela@data)
+writeOGR(guarda,"C:/DADES/POUMTORRE_2/DADES_PG/equipaments","parcelaindex", driver="ESRI Shapefile")
+```
+
+# Mira ancho de calle ######################################
+usa nearestPointOnLine de maptools
+getSpatialLinesMidPoints y SpatialLinesLengths de sp
+
+```{r}
+library(maptools)
+library(rgdal)
+library(rgeos)
+library(Matrix)
+# Tarragona
+eje=readOGR("C:/DadesObertes/TARRAGONA/2016/43_900_UA_2016-01-24_SHF/EJES","EJES")
+masa=readOGR("C:/DadesObertes/TARRAGONA/2016/43_900_UA_2016-01-24_SHF/MASA","MASA")
+vorera=readOGR("C:/DadesObertes/TARRAGONA/ICC","voreres")
+
+# Torredembarra
+eje=readOGR("C:/DADES/DadesObertes/TORREDEMBARRA/2016/43_155_UA_2016-01-24_SHF/EJES","EJES")
+masa=readOGR("C:/DADES/DadesObertes/TORREDEMBARRA/2016/43_155_UA_2016-01-24_SHF/MASA","MASA")
+vorera=readOGR("C:/DADES/POUMTORRE_2/cartografia/gencat/ICC/1_1000/ETRS89/Topografic ETRS89","vorera")
+
+```
+
+Funcion de calcular el punto medio de una linea
+
+```{r}
+medio<-function(k){     # k=fichero de ejes de calle leido directamente con readOGR
+        medios=getSpatialLinesMidPoints(k)
+        centros=data.frame()
+        clave=c()
+        for(n in 1:length(k@lines)){
+                newcentro <- nearestPointOnLine(k@lines[[n]]@Lines[[1]]@coords, medios[n]@coords)
+                centros=rBind(centros,c(newcentro,k@data$VIA[n]))
+        }
+        colnames(centros)<-c("x","y","via")
+        return(centros)
+}
+
+```
+
+Aplicacion de la funcion anterior
+
+```{r}
+# Selecciona los ejes  con codigo y mas largos de 20 metros
+eje=subset(eje,eje@data$VIA!="0" & gLength(eje,byid=TRUE)>20)
+length(eje)
+# Como prueba trabajamos con 100 tramos
+ejes=eje        #=eje[1:1000,]
+str(ejes@data)
+
+# #######################################
+# Busca el punto medio de cada tramo
+centro=medio(ejes)
+centro=SpatialPointsDataFrame(centro[,1:2],centro)
+proj4string(centro) <- CRS( "+proj=utm +zone=31 +ellps=GRS80 +units=m +no_defs" )
+plot(centro)
+
+# #######################################
+# Crea bufers en cada centro de tramo
+bufers <- gBuffer(centro,width=50, byid=TRUE, id=paste0(centro@data$via,";",row(as.matrix(row.names(centro@coords)))))
+
+proj4string(bufers) <- CRS( "+proj=utm +zone=31 +ellps=GRS80 +units=m +no_defs" )
+#plot(bufers)
+str(bufers)
+
+# #######################################
+# Crea la interseccion del buffer con las manzanas como un clip
+clip <- sapply(bufers@polygons,function(x) 
+        gIntersection(masa, SpatialPolygons(list(x)), 
+                      byid=TRUE))
+
+# #######################################
+# Crea la interseccion del buffer con las aceras como un clipacera
+clipacera <- sapply(bufers@polygons,function(x) 
+        gIntersection(vorera, SpatialPolygons(list(x)), 
+                      byid=TRUE))
+
+# ###################################################################
+# Calcula la distancia de cada centro a las manzanas del bufer (clip)
+
+distancia <- sapply(1:length(centro), function(x) { 
+        if(!is.null(clip[[x]])) gDistance(centro[x,1:2], SpatialPolygons(clip[[x]]@polygons),byid=FALSE)
+        else 0
+        })
+
+# ###################################################################
+# Calcula la distancia de cada centro a las manzanas del bufer (clip)
+
+calzada <- sapply(1:length(centro), function(x) { 
+        if(!is.null(clipacera[[x]])) gDistance(centro[x,1:2], SpatialLines(clipacera[[x]]@lines),byid=FALSE)
+        else 0
+        })
+
+# ####################
+# Guarda datos
+ejes$dista=distancia*2
+ejes$calzada=calzada*2
+ejesnew=SpatialLinesDataFrame(ejes, ejes@data)
+ejesnew<-subset(ejesnew, ejesnew@data$dista<50)
+writeOGR(ejesnew,"C:/DadesObertes/TARRAGONA/ICC","EJESnew",driver="ESRI Shapefile")
+
+str(distancia)
+head(distancia)
+hist(distancia*2,breaks=100)
+hist(calzada*2, breaks=100, add=TRUE, col="lightblue")
+a=plot(ejesnew, lwd=ejesnew$dista/5)
+```
+
+
+
